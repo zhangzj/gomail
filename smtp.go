@@ -58,7 +58,7 @@ func NewPlainDialer(host string, port int, username, password string) *Dialer {
 // Dial dials and authenticates to an SMTP server. The returned SendCloser
 // should be closed when done using it.
 func (d *Dialer) Dial() (SendCloser, error) {
-	conn, err := netDialTimeout("tcp", addr(d.Host, d.Port), 10*time.Second)
+	conn, err := netDialTimeout("tcp", addr(d.Host, d.Port), 100*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +130,7 @@ func addr(host string, port int) string {
 func (d *Dialer) DialAndSend(m ...*Message) error {
 	s, err := d.Dial()
 	if err != nil {
+		fmt.Println("err from dial and send : " + err.Error())
 		return err
 	}
 	defer s.Close()
@@ -144,13 +145,36 @@ type smtpSender struct {
 
 func (c *smtpSender) Send(from string, to []string, msg io.WriterTo) error {
 	if err := c.Mail(from); err != nil {
-		if err == io.EOF {
-			// This is probably due to a timeout, so reconnect and try again.
+		fmt.Println("err " + err.Error())
+		// if send mail error occur, retry 3 times
+
+		for i := 0; i < 3; i++ {
 			sc, derr := c.d.Dial()
 			if derr == nil {
 				if s, ok := sc.(*smtpSender); ok {
 					*c = *s
-					return c.Send(from, to, msg)
+					if mailErr := c.Mail(from); mailErr != nil {
+						time.Sleep(10 * time.Second)
+						continue
+					} else {
+						for _, addr := range to {
+							if err := c.Rcpt(addr); err != nil {
+								return err
+							}
+						}
+
+						w, err := c.Data()
+						if err != nil {
+							return err
+						}
+
+						if _, err = msg.WriteTo(w); err != nil {
+							w.Close()
+							return err
+						}
+
+						return w.Close()
+					}
 				}
 			}
 		}
